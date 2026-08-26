@@ -57,21 +57,21 @@ const char *time_mode_name(size_t idx) {
 // happens to be showing at export time.
 ColorRGBu8 role_to_color(GCodeExtrusionRole role) {
     switch (role) {
-    case GCodeExtrusionRole::Perimeter: return {0, 128, 255};
-    case GCodeExtrusionRole::ExternalPerimeter: return {255, 255, 0};
+    case GCodeExtrusionRole::Perimeter: return {0, 95, 115}; //P2
+    case GCodeExtrusionRole::ExternalPerimeter: return {10, 147, 150}; //P3
     case GCodeExtrusionRole::OverhangPerimeter: return {255, 128, 0};
-    case GCodeExtrusionRole::InternalInfill: return {255, 0, 0};
-    case GCodeExtrusionRole::SolidInfill: return {200, 0, 0};
-    case GCodeExtrusionRole::TopSolidInfill: return {255, 0, 128};
-    case GCodeExtrusionRole::Ironing: return {255, 192, 203};
-    case GCodeExtrusionRole::BridgeInfill: return {0, 255, 255};
-    case GCodeExtrusionRole::GapFill: return {128, 128, 255};
-    case GCodeExtrusionRole::Skirt: return {0, 255, 0};
-    case GCodeExtrusionRole::SupportMaterial: return {0, 180, 0};
+    case GCodeExtrusionRole::InternalInfill: return {202, 103, 2}; //P7
+    case GCodeExtrusionRole::SolidInfill: return {187, 62, 3}; //P8
+    case GCodeExtrusionRole::TopSolidInfill: return {238, 155, 0}; //P6
+    case GCodeExtrusionRole::Ironing: return {233, 216, 166}; //P5
+    case GCodeExtrusionRole::BridgeInfill: return {174, 32, 18}; //P9
+    case GCodeExtrusionRole::GapFill: return {155, 34, 28}; //P10
+    case GCodeExtrusionRole::Skirt: return {0, 18, 25}; //P1
+    case GCodeExtrusionRole::SupportMaterial: return {148, 210, 189}; //P4
     case GCodeExtrusionRole::SupportMaterialInterface: return {0, 120, 0};
-    case GCodeExtrusionRole::WipeTower: return {180, 180, 180};
-    case GCodeExtrusionRole::Custom: return {160, 160, 160};
-    default: return {128, 128, 128}; // None / unknown
+    case GCodeExtrusionRole::WipeTower: return {180, 180, 180}; //Unchanged
+    case GCodeExtrusionRole::Custom: return {160, 160, 160};    // Unchanged
+    default: return {128, 128, 128}; // None / unknown //Unchanged
     }
 }
 
@@ -143,18 +143,53 @@ CrossSection cross_section(
     CrossSection ret;
     ret.ring.reserve(CROSS_SECTION_SIDES);
 
+    // Stadium / discorectangle shape: two straight sides (along `right`) connected by
+    // semicircular caps of radius b = height/2 (the caps sit on the `up` axis, i.e.
+    // the shape is "flattened" the same way a real extrusion bead is: wider than it
+    // is tall). If height >= width, the straight part vanishes and this degenerates
+    // to a plain circle of radius b.
     const float a = 0.5f * width;
     const float b = 0.5f * height;
+    const float s = std::max(a - b, 0.0f); // half-length of each straight side
+
+    const float arc_len = PI_F * b;      // length of one semicircular cap
+    const float straight_len = 2.0f * s; // length of one straight side
+    const float perimeter = 2.0f * arc_len + 2.0f * straight_len;
 
     for (int i = 0; i < CROSS_SECTION_SIDES; ++i) {
-        const float t = float(i) * (2.0f * PI_F) / float(CROSS_SECTION_SIDES);
-        const float ct = std::cos(t);
-        const float st = std::sin(t);
+        const float dist = perimeter * (float(i) / float(CROSS_SECTION_SIDES));
+
+        float x, y; // local 2D coords in the (right, up) plane
+        Vec3f n;    // local outward normal
+
+        if (dist < arc_len) {
+            // right-hand cap: sweeps CCW from the bottom (-90 deg) to the top (+90 deg)
+            const float theta = -0.5f * PI_F + dist / b;
+            x = s + b * std::cos(theta);
+            y = b * std::sin(theta);
+            n = std::cos(theta) * right + std::sin(theta) * up;
+        } else if (dist < arc_len + straight_len) {
+            // top straight side: from (s, b) to (-s, b)
+            const float t = (dist - arc_len) / straight_len;
+            x = s - t * straight_len;
+            y = b;
+            n = up;
+        } else if (dist < 2.0f * arc_len + straight_len) {
+            // left-hand cap: sweeps CCW from the top (+90 deg) to the bottom (+270 deg)
+            const float theta = 0.5f * PI_F + (dist - arc_len - straight_len) / b;
+            x = -s + b * std::cos(theta);
+            y = b * std::sin(theta);
+            n = std::cos(theta) * right + std::sin(theta) * up;
+        } else {
+            // bottom straight side: from (-s, -b) to (s, -b)
+            const float t = (dist - 2.0f * arc_len - straight_len) / straight_len;
+            x = -s + t * straight_len;
+            y = -b;
+            n = -up;
+        }
 
         Vertex vx;
-        vx.position = v + (ct * a) * right + (st * b) * up;
-
-        Vec3f n = ct * right + st * up;
+        vx.position = v + x * right + y * up;
         const float nl = n.norm();
         vx.normal = (nl > 1e-12f) ? (n / nl) : right;
 
